@@ -1,6 +1,8 @@
-streamlit
+pandas
+numpy
 scikit-learn
 xgboost
 lightgbm
-numpy
-joblib
+matplotlib
+seaborn
+streamlit
