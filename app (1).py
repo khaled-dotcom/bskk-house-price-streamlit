@@ -1,24 +1,22 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
-from sklearn.linear_model import Ridge, LinearRegression
+from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import StackingRegressor
 from xgboost import XGBRegressor
 from lightgbm import LGBMRegressor
+from sklearn.ensemble import StackingRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
 from scipy.stats import skew
-import matplotlib.pyplot as plt
-import seaborn as sns
 import warnings
-
 warnings.filterwarnings("ignore")
 
-st.set_page_config(page_title="House Price Predictor", layout="wide")
-st.title("🏠 House Price Prediction App")
+st.set_page_config(page_title="House Price Predictor", layout="centered")
+st.title("🏠 House Price Predictor")
 
-# Load Data
+# Load data
 @st.cache_data
 def load_data():
     train = pd.read_csv("train.csv")
@@ -26,17 +24,12 @@ def load_data():
     return train, test
 
 train, test = load_data()
-test_ids = test['Id']
-
-st.subheader("🔍 Initial Data Overview")
-st.write("Train Shape:", train.shape)
-st.write("Test Shape:", test.shape)
 
 # Preprocessing
-train.drop(train[(train['GrLivArea'] > 4000) & (train['SalePrice'] < 300000)].index, inplace=True)
+train.drop(train[(train['GrLivArea'] > 4000) & (np.log1p(train['SalePrice']) < 12.6)].index, inplace=True)
 y = np.log1p(train['SalePrice'])
-
 train.drop(['SalePrice', 'Id'], axis=1, inplace=True)
+test_ids = test['Id']
 test.drop(['Id'], axis=1, inplace=True)
 all_data = pd.concat([train, test], axis=0)
 
@@ -69,7 +62,7 @@ all_data['TotalSF'] = all_data['TotalBsmtSF'] + all_data['1stFlrSF'] + all_data[
 all_data['TotalBathrooms'] = (all_data['FullBath'] + 0.5*all_data['HalfBath'] +
                                all_data['BsmtFullBath'] + 0.5*all_data['BsmtHalfBath'])
 
-# Fix Skewness
+# Fix skew
 numeric_feats = all_data.select_dtypes(include=[np.number]).columns
 skewed_feats = all_data[numeric_feats].apply(lambda x: skew(x.dropna())).sort_values(ascending=False)
 high_skew = skewed_feats[abs(skewed_feats) > 0.75].index
@@ -78,58 +71,51 @@ all_data[high_skew] = np.log1p(all_data[high_skew])
 # One-hot encoding
 all_data = pd.get_dummies(all_data)
 
-# Split
+# Final split
 X = all_data[:len(train)]
-X_test = all_data[len(train):]
-
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
-X_test_scaled = scaler.transform(X_test)
 
 X_train, X_val, y_train, y_val = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
 
-# Models
+# Train Models
 ridge = Ridge(alpha=10)
 xgb = XGBRegressor(n_estimators=1000, learning_rate=0.05, max_depth=4,
                    subsample=0.7, colsample_bytree=0.7, random_state=42)
 lgbm = LGBMRegressor(n_estimators=1000, learning_rate=0.05, max_depth=4,
                      subsample=0.7, colsample_bytree=0.7, random_state=42)
 
-models = {"Ridge": ridge, "XGBoost": xgb, "LightGBM": lgbm}
-rmse_scores = {}
-
-# Train & Evaluate
-for name, model in models.items():
-    model.fit(X_train, y_train)
-    preds = model.predict(X_val)
-    rmse = np.sqrt(mean_squared_error(y_val, preds))
-    rmse_scores[name] = rmse
-
-# Stacked Model
 estimators = [("ridge", ridge), ("xgb", xgb), ("lgbm", lgbm)]
 stack = StackingRegressor(estimators=estimators, final_estimator=LinearRegression())
 stack.fit(X_train, y_train)
-stack_preds = stack.predict(X_val)
-stack_rmse = np.sqrt(mean_squared_error(y_val, stack_preds))
-rmse_scores["Stacked"] = stack_rmse
 
-# Select Champion
-champion = min(rmse_scores, key=rmse_scores.get)
-final_model = stack if champion == "Stacked" else models[champion]
-final_model.fit(X_scaled, y)
+# ============ User Input ============
 
-st.subheader("📊 Model Performance (RMSE)")
-for name, score in rmse_scores.items():
-    st.write(f"{name}: {score:.4f}")
-st.success(f"✅ Best Model: {champion} (RMSE: {rmse_scores[champion]:.4f})")
+st.subheader("🔧 Enter House Features to Predict Price")
 
-# Predictions
-preds = np.expm1(final_model.predict(X_test_scaled))
-submission = pd.DataFrame({"Id": test_ids, "SalePrice": preds})
+# Let’s use only a few important numeric features from training data
+input_features = {
+    'OverallQual': st.slider("Overall Quality (1-10)", 1, 10, 5),
+    'GrLivArea': st.slider("Above Grade Living Area (sq ft)", 400, 4000, 1500),
+    'TotalBathrooms': st.slider("Total Bathrooms", 1.0, 5.0, 2.5),
+    'GarageCars': st.slider("Garage Capacity (Cars)", 0, 4, 2),
+    'GarageArea': st.slider("Garage Area (sq ft)", 0, 1000, 400),
+    'TotalSF': st.slider("Total SF (Basement + 1st + 2nd)", 500, 6000, 1800),
+    'YearBuilt': st.slider("Year Built", 1900, 2020, 2000),
+    'YearRemodAdd': st.slider("Year Remodeled", 1950, 2020, 2005),
+}
 
-st.subheader("📥 Download Prediction")
-st.dataframe(submission.head())
-st.download_button("📄 Download Submission CSV", submission.to_csv(index=False), file_name="submission.csv")
+# Build input row with same structure as all_data
+sample_input = pd.DataFrame([input_features])
+# Fill in 0s for other features
+model_features = pd.DataFrame(columns=X.columns)
+input_final = pd.concat([sample_input, pd.DataFrame(columns=model_features.columns.difference(sample_input.columns))], axis=1).fillna(0)
 
-st.markdown("---")
-st.caption("Built with ❤️ using Streamlit by [Your Name]")
+# Scale
+input_scaled = scaler.transform(input_final)
+
+# Predict
+if st.button("💡 Predict Price"):
+    pred_log = stack.predict(input_scaled)[0]
+    price = np.expm1(pred_log)
+    st.success(f"🏠 Estimated House Price: **${price:,.0f}**")
