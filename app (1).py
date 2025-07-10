@@ -1,3 +1,6 @@
+import os
+os.system('pip install joblib')  # Force-install joblib in Streamlit Cloud
+
 import streamlit as st
 import numpy as np
 import joblib
